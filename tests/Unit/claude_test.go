@@ -179,6 +179,26 @@ func TestTheRequestOverridesTheDefaultsAndTheFallbackCanBeTurnedOff(t *testing.T
 	}
 }
 
+// TestAWorkspaceIsNamedForAUserKey: a key that is not scoped to a workspace
+// runs in the one Config names, through the anthropic-workspace-id header.
+func TestAWorkspaceIsNamedForAUserKey(t *testing.T) {
+	a := &api{reply: func(int) (int, string) { return 200, message("end_turn", "ok") }}
+	c := client(t, a.server(t), claude.Config{WorkspaceID: "wrkspc_test"})
+	if _, err := c.Complete(context.Background(), claude.Request{Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.headers[0].Get("anthropic-workspace-id"); got != "wrkspc_test" {
+		t.Fatalf("workspace header %q", got)
+	}
+	b := &api{reply: func(int) (int, string) { return 200, message("end_turn", "ok") }}
+	if _, err := client(t, b.server(t), claude.Config{}).Complete(context.Background(), claude.Request{Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.headers[0].Get("anthropic-workspace-id"); got != "" {
+		t.Fatalf("a workspace was sent without being configured: %q", got)
+	}
+}
+
 // TestTheConfigurationRefusesWhatCannotWork.
 func TestTheConfigurationRefusesWhatCannotWork(t *testing.T) {
 	for name, cfg := range map[string]claude.Config{

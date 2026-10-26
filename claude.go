@@ -75,6 +75,10 @@ type Config struct {
 	BaseURL string
 	// HTTPClient replaces the SDK's HTTP client.
 	HTTPClient *http.Client
+	// WorkspaceID names the workspace a key that is not scoped to one runs
+	// in (a user key: "sk-ant-usr-…"), sent as the anthropic-workspace-id
+	// header. A workspace-scoped key needs none.
+	WorkspaceID string
 	// NoFallback turns off the server-side fallback that re-serves a request
 	// the model declined for policy reasons on the model's default
 	// substitute. It is on by default.
@@ -210,6 +214,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.HTTPClient != nil {
 		opts = append(opts, option.WithHTTPClient(cfg.HTTPClient))
+	}
+	if id := strings.TrimSpace(cfg.WorkspaceID); id != "" {
+		opts = append(opts, option.WithHeader("anthropic-workspace-id", id))
 	}
 	c.api = anthropic.NewClient(opts...)
 	return c, nil

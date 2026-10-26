@@ -10,6 +10,12 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+### Added
+
+- `Config.WorkspaceID` names the workspace a user API key (one not scoped to a workspace) runs in, sent as the `anthropic-workspace-id` header. Without it the API refuses such a key with 400.
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

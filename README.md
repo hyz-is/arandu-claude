@@ -94,6 +94,7 @@ fake.Requests()[0].Prompt // what the service asked
 | `Timeout` | 2 minutes | one request, retries included |
 | `MaxRetries` | the SDK's 2 | negative turns retries off |
 | `BaseURL`, `HTTPClient` | the SDK's | for a proxy or a test server |
+| `WorkspaceID` | none | the workspace a user key (not scoped to one) runs in |
 | `NoFallback` | false | turns off the server-side fallback for policy refusals |
 
 The server-side fallback (`fallbacks: "default"`) is on by default: when the
