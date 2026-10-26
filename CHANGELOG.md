@@ -10,3 +10,13 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
+### Added
+
+- `New(Config)` builds a `*Client` over the official Anthropic Go SDK (v1.84.0), refusing a missing key, an unknown effort or a negative token cap.
+- `Complete(ctx, Request)` asks one question and returns only a whole answer. Text, or JSON checked against `Request.Schema`. A refusal (`ErrRefused`, with `*Refusal` carrying the category), an answer cut at the cap (`ErrTruncated`), an empty answer (`ErrEmpty`) and invalid JSON are errors.
+- Defaults: model `claude-opus-5-5`, effort `high`, 16000 tokens, two-minute timeout, the SDK's retries, and the server-side fallback for policy refusals (`NoFallback` turns it off).
+- `System` is sent as a cached block. `Result` carries the model that answered, the message id and the token usage.
+- `Completer` and `Fake`, a scripted `Completer` that records the requests, for an application's tests.
+

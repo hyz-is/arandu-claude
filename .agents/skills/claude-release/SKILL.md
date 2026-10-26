@@ -74,7 +74,7 @@ profiles = ["conventional", "performance"]
 network = false
 filesystem = false
 exec = false
-migrations = true
+migrations = false
 ```
 
 `TestTheDeclaredCapabilitiesAreWhatTheCodeDoes`, in `tests/Unit/audit_test.go`,
