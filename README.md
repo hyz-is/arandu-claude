@@ -74,6 +74,29 @@ _ = res.Decode(&draft)
 log.Info("claude", "model", res.Model, "in", res.Usage.InputTokens, "out", res.Usage.OutputTokens)
 ```
 
+### With a picture
+
+`Images` goes before the `Prompt` in the same message, as base64 image blocks.
+`MediaType` may be left empty: it is detected from the bytes. A photo received
+on WhatsApp, for instance:
+
+```go
+res, err := ai.Complete(ctx, claude.Request{
+    System: agronomistRules,
+    Prompt: "O que está acontecendo com esta folha de café?",
+    Images: []claude.Image{{MediaType: "image/jpeg", Data: photoBytes}},
+    Schema: diagnosisSchema, // optional; without it the answer is text in res.Text
+})
+if errors.Is(err, claude.ErrBadImage) {
+    // not jpeg/png/webp/gif, empty, over 5 MB, or the bytes are not what was declared
+}
+```
+
+Accepted: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, up to
+`claude.MaxImageBytes` (5 MB) each and `claude.MaxImages` (100) per request. A
+bad image fails before the call, with an error that wraps `claude.ErrBadImage`;
+`Image.Validate()` runs the same check on its own. The prompt is still required.
+
 ## Test with it
 
 ```go
@@ -81,6 +104,7 @@ fake := claude.NewFake(claude.Answer{JSON: `{"fit": 80, "offer": 6000, "text": "
 svc := services.NewProposals(db, fake)
 // … exercise svc …
 fake.Requests()[0].Prompt // what the service asked
+fake.Requests()[0].Images // the pictures that came with it
 ```
 
 ## Config

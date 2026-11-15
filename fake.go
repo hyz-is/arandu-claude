@@ -14,6 +14,7 @@ import (
 //	svc := services.NewProposals(db, fake)
 //	...
 //	fake.Requests()[0].Prompt // what the service asked
+//	fake.Requests()[0].Images // the pictures that came with it
 type Fake struct {
 	mu       sync.Mutex
 	script   []Answer
@@ -43,7 +44,8 @@ func (f *Fake) Push(answers ...Answer) {
 	f.script = append(f.script, answers...)
 }
 
-// Complete records the request and gives the next scripted answer.
+// Complete records the request, images included (it does not validate them;
+// call Image.Validate to check one), and gives the next scripted answer.
 func (f *Fake) Complete(_ context.Context, req Request) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

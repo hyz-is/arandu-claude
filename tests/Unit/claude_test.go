@@ -1,7 +1,9 @@
 package unit_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -237,5 +239,125 @@ func TestTheFakeAnswersInOrderAndRecordsTheRequests(t *testing.T) {
 	}
 	if got := f.Requests(); len(got) != 3 || got[1].Prompt != "dois" {
 		t.Fatalf("requests %+v", got)
+	}
+}
+
+// Real file headers, so the type the bytes carry is the one detected.
+var (
+	jpegBytes = []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01}
+	pngBytes  = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D}
+	gifBytes  = []byte("GIF89a\x01\x00\x01\x00\x80\x00\x00")
+	webpBytes = []byte("RIFF\x1a\x00\x00\x00WEBPVP8 \x0e\x00\x00\x00")
+)
+
+// TestImagesGoBeforeThePromptAsBase64Blocks: the body carries one image block
+// per picture, in order, then the text block with the prompt.
+func TestImagesGoBeforeThePromptAsBase64Blocks(t *testing.T) {
+	a := &api{reply: func(int) (int, string) { return 200, message("end_turn", `{"fit": 7}`) }}
+	c := client(t, a.server(t), claude.Config{})
+	_, err := c.Complete(context.Background(), claude.Request{
+		Prompt: "O que há de errado com esta folha?",
+		Schema: schema,
+		Images: []claude.Image{
+			{MediaType: "image/jpeg", Data: jpegBytes},
+			{Data: pngBytes}, // type detected from the bytes
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := a.bodies[0]["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("messages %v", a.bodies[0]["messages"])
+	}
+	m := msgs[0].(map[string]any)
+	blocks, _ := m["content"].([]any)
+	if m["role"] != "user" || len(blocks) != 3 {
+		t.Fatalf("message %v", m)
+	}
+	for i, want := range []struct {
+		mt   string
+		data []byte
+	}{{"image/jpeg", jpegBytes}, {"image/png", pngBytes}} {
+		b := blocks[i].(map[string]any)
+		src, _ := b["source"].(map[string]any)
+		if b["type"] != "image" || src["type"] != "base64" || src["media_type"] != want.mt || src["data"] != base64.StdEncoding.EncodeToString(want.data) {
+			t.Errorf("block %d: %v", i, b)
+		}
+	}
+	last := blocks[2].(map[string]any)
+	if last["type"] != "text" || last["text"] != "O que há de errado com esta folha?" {
+		t.Errorf("the prompt is not the last block: %v", last)
+	}
+}
+
+// TestARequestWithoutImagesStaysAsItWas: one text block, nothing else.
+func TestARequestWithoutImagesStaysAsItWas(t *testing.T) {
+	a := &api{reply: func(int) (int, string) { return 200, message("end_turn", "ok") }}
+	if _, err := client(t, a.server(t), claude.Config{}).Complete(context.Background(), claude.Request{Prompt: "oi"}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := a.bodies[0]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(blocks) != 1 || blocks[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("blocks %v", blocks)
+	}
+}
+
+// TestAnImageThatCannotBeSentIsRefusedBeforeTheCall: wrong type, empty,
+// declared type that the bytes contradict, too big and too many.
+func TestAnImageThatCannotBeSentIsRefusedBeforeTheCall(t *testing.T) {
+	cases := map[string][]claude.Image{
+		"unsupported type": {{MediaType: "image/bmp", Data: []byte("BM\x00\x00\x00\x00\x00\x00")}},
+		"pdf as image":     {{MediaType: "application/pdf", Data: []byte("%PDF-1.7 ...")}},
+		"undetectable":     {{Data: []byte("not an image at all")}},
+		"empty":            {{MediaType: "image/png"}},
+		"empty no type":    {{}},
+		"type mismatch":    {{MediaType: "image/png", Data: jpegBytes}},
+		"too big":          {{MediaType: "image/png", Data: append(bytes.Clone(pngBytes), make([]byte, claude.MaxImageBytes)...)}},
+		"second is bad":    {{MediaType: "image/gif", Data: gifBytes}, {MediaType: "image/png"}},
+		"too many":         make([]claude.Image, claude.MaxImages+1),
+	}
+	for name, imgs := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := &api{reply: func(int) (int, string) { return 200, message("end_turn", "ok") }}
+			c := client(t, a.server(t), claude.Config{})
+			_, err := c.Complete(context.Background(), claude.Request{Prompt: "p", Images: imgs})
+			if !errors.Is(err, claude.ErrBadImage) {
+				t.Fatalf("err %v, want ErrBadImage", err)
+			}
+			if a.calls.Load() != 0 {
+				t.Fatal("the API was called with an invalid image")
+			}
+		})
+	}
+	for _, im := range []claude.Image{{MediaType: "image/gif", Data: gifBytes}, {MediaType: "IMAGE/WEBP", Data: webpBytes}, {Data: jpegBytes}} {
+		if err := im.Validate(); err != nil {
+			t.Errorf("%q refused: %v", im.MediaType, err)
+		}
+	}
+	if err := (claude.Image{MediaType: "image/bmp", Data: jpegBytes}).Validate(); !errors.Is(err, claude.ErrBadImage) {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+// TestThePromptIsStillRequiredWithAnImage.
+func TestThePromptIsStillRequiredWithAnImage(t *testing.T) {
+	c, _ := claude.New(claude.Config{APIKey: "k"})
+	if _, err := c.Complete(context.Background(), claude.Request{Images: []claude.Image{{Data: pngBytes}}}); err == nil {
+		t.Error("an image without a prompt was sent")
+	}
+}
+
+// TestTheFakeRecordsTheImages: the application's test can check that the
+// photo reached the call.
+func TestTheFakeRecordsTheImages(t *testing.T) {
+	f := claude.NewFake(claude.Answer{Text: "ferrugem"})
+	img := claude.Image{MediaType: "image/jpeg", Data: jpegBytes}
+	if _, err := f.Complete(context.Background(), claude.Request{Prompt: "diagnóstico", Images: []claude.Image{img}}); err != nil {
+		t.Fatal(err)
+	}
+	got := f.Requests()[0].Images
+	if len(got) != 1 || got[0].MediaType != "image/jpeg" || !bytes.Equal(got[0].Data, jpegBytes) {
+		t.Fatalf("images %+v", got)
 	}
 }

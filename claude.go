@@ -13,6 +13,7 @@ package claude
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,6 +86,59 @@ type Config struct {
 	NoFallback bool
 }
 
+// The limits the Messages API puts on images, checked here so a request that
+// cannot work fails before it is sent.
+const (
+	// MaxImageBytes is the largest image the API accepts, 5 MB.
+	MaxImageBytes = 5 * 1024 * 1024
+	// MaxImages is the most images the API accepts in one request.
+	MaxImages = 100
+)
+
+// Image is a picture sent with the question.
+type Image struct {
+	// MediaType is "image/jpeg", "image/png", "image/webp" or "image/gif".
+	// Empty means it is detected from Data. A declared type that does not
+	// match the bytes is refused, as the API would refuse it.
+	MediaType string
+	// Data is the raw bytes of the file, not base64. At most MaxImageBytes.
+	Data []byte
+}
+
+// ErrBadImage is what an image that cannot be sent wraps.
+var ErrBadImage = errors.New("claude: invalid image")
+
+// mediaType returns the type the image will be sent as, or an error that
+// wraps ErrBadImage.
+func (im Image) mediaType() (string, error) {
+	if len(im.Data) == 0 {
+		return "", fmt.Errorf("%w: empty", ErrBadImage)
+	}
+	if len(im.Data) > MaxImageBytes {
+		return "", fmt.Errorf("%w: %d bytes exceeds the %d byte limit", ErrBadImage, len(im.Data), MaxImageBytes)
+	}
+	sniffed := http.DetectContentType(im.Data)
+	declared := strings.ToLower(strings.TrimSpace(im.MediaType))
+	if declared == "" {
+		declared = sniffed
+	}
+	switch declared {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+	default:
+		return "", fmt.Errorf("%w: type %q is not one of image/jpeg, image/png, image/webp, image/gif", ErrBadImage, declared)
+	}
+	if sniffed != declared {
+		return "", fmt.Errorf("%w: declared %s but the bytes are %s", ErrBadImage, declared, sniffed)
+	}
+	return declared, nil
+}
+
+// Validate reports why the image cannot be sent, wrapping ErrBadImage.
+func (im Image) Validate() error {
+	_, err := im.mediaType()
+	return err
+}
+
 // Request is one question.
 type Request struct {
 	// System is the instruction that frames every answer: who is answering,
@@ -93,6 +147,9 @@ type Request struct {
 	System string
 	// Prompt is the question itself. Required.
 	Prompt string
+	// Images are pictures the question is about, sent before the Prompt in
+	// the same message. Optional; at most MaxImages, each valid per Image.
+	Images []Image
 	// Schema, when set, is the JSON schema the answer must satisfy; the
 	// answer then arrives in Result.JSON. Objects in it need
 	// "additionalProperties": false.
@@ -234,6 +291,10 @@ func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 	if !req.Effort.valid() {
 		return Result{}, fmt.Errorf("claude: Request.Effort %q is not one of low, medium, high, xhigh, max", req.Effort)
 	}
+	blocks, err := content(req)
+	if err != nil {
+		return Result{}, err
+	}
 	effort := req.Effort
 	if effort == "" {
 		effort = c.effort
@@ -245,7 +306,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 	params := anthropic.BetaMessageNewParams{
 		Model:     anthropic.Model(c.model),
 		MaxTokens: maxTokens,
-		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(req.Prompt))},
+		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(blocks...)},
 		OutputConfig: anthropic.BetaOutputConfigParam{
 			Effort: anthropic.BetaOutputConfigEffort(effort),
 		},
@@ -268,6 +329,25 @@ func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("claude: %w", err)
 	}
 	return read(msg, req.Schema != nil)
+}
+
+// content builds the user message: the images first, then the prompt.
+func content(req Request) ([]anthropic.BetaContentBlockParamUnion, error) {
+	if len(req.Images) > MaxImages {
+		return nil, fmt.Errorf("%w: %d images exceeds the limit of %d", ErrBadImage, len(req.Images), MaxImages)
+	}
+	blocks := make([]anthropic.BetaContentBlockParamUnion, 0, len(req.Images)+1)
+	for i, im := range req.Images {
+		mt, err := im.mediaType()
+		if err != nil {
+			return nil, fmt.Errorf("claude: Request.Images[%d]: %w", i, err)
+		}
+		blocks = append(blocks, anthropic.NewBetaImageBlock(anthropic.BetaBase64ImageSourceParam{
+			Data:      base64.StdEncoding.EncodeToString(im.Data),
+			MediaType: anthropic.BetaBase64ImageSourceMediaType(mt),
+		}))
+	}
+	return append(blocks, anthropic.NewBetaTextBlock(req.Prompt)), nil
 }
 
 // read turns a message into a Result, checking the stop reason before the

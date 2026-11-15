@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Nothing to change. `Request.Images` is optional; a request without it is sent as before.
+
 ## 0.2.0
 
 Nothing to change. A user API key (`sk-ant-usr-…`) now works by setting `Config.WorkspaceID`.

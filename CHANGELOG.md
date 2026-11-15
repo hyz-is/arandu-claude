@@ -10,6 +10,14 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-15
+
+### Added
+
+- `Request.Images` sends pictures with the question: `Image{MediaType, Data}` (raw bytes), as base64 image blocks before the prompt, in the same user message. Accepts `image/jpeg`, `image/png`, `image/webp` and `image/gif`; an empty `MediaType` is detected from the bytes.
+- An image that cannot be sent (other type, empty, over `MaxImageBytes` (5 MB), a declared type the bytes contradict, more than `MaxImages` (100)) is refused before the call with an error wrapping `ErrBadImage`. `Image.Validate()` runs the same check.
+- `Fake` records the images in `Requests()`.
+
 ## [0.2.0] - 2026-10-26
 
 ### Added
