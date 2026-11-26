@@ -97,6 +97,28 @@ Accepted: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, up to
 bad image fails before the call, with an error that wraps `claude.ErrBadImage`;
 `Image.Validate()` runs the same check on its own. The prompt is still required.
 
+### With a PDF
+
+`Documents` goes first in the same message, before the `Images` and the `Prompt`,
+as base64 document blocks. The model reads the text of the PDF and looks at its
+pages, so a scanned PDF works too:
+
+```go
+res, err := ai.Complete(ctx, claude.Request{
+    System:    "Transcreva o plano alimentar.",
+    Prompt:    "Leia o documento.",
+    Documents: []claude.Document{{Data: pdfBytes}}, // MediaType may be empty
+    Schema:    planSchema,
+})
+if errors.Is(err, claude.ErrBadDocument) {
+    // not a PDF by its bytes, empty, over 32 MB, or more than 5 in one request
+}
+```
+
+Up to `claude.MaxDocumentBytes` (32 MB) each and `claude.MaxDocuments` (5) per
+request; the API reads at most 100 pages of PDF per request. `Document.Validate()`
+runs the check on its own.
+
 ## Test with it
 
 ```go
@@ -105,6 +127,7 @@ svc := services.NewProposals(db, fake)
 // … exercise svc …
 fake.Requests()[0].Prompt // what the service asked
 fake.Requests()[0].Images // the pictures that came with it
+fake.Requests()[0].Documents // the PDFs that came with it
 ```
 
 ## Config

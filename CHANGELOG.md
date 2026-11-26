@@ -10,6 +10,14 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
+### Added
+
+- `Request.Documents` sends PDFs with the question: `Document{MediaType, Data}` (raw bytes), as base64 document blocks before the images and the prompt, in the same user message. The model reads the text and the pages of the PDF, so a scanned PDF is read too. An empty `MediaType` is detected from the bytes.
+- A document that cannot be sent (other type, empty, bytes that are not a PDF, over `MaxDocumentBytes` (32 MB), more than `MaxDocuments` (5)) is refused before the call with an error wrapping `ErrBadDocument`. `Document.Validate()` runs the same check.
+- `Fake` records the documents in `Requests()`.
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

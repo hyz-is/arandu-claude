@@ -361,3 +361,78 @@ func TestTheFakeRecordsTheImages(t *testing.T) {
 		t.Fatalf("images %+v", got)
 	}
 }
+
+var pdfBytes = []byte("%PDF-1.7\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")
+
+// TestDocumentsGoFirstAsBase64PDFBlocks: the PDFs come before the pictures and
+// the prompt, in the same user message.
+func TestDocumentsGoFirstAsBase64PDFBlocks(t *testing.T) {
+	a := &api{reply: func(int) (int, string) { return 200, message("end_turn", `{"fit": 7}`) }}
+	c := client(t, a.server(t), claude.Config{})
+	_, err := c.Complete(context.Background(), claude.Request{
+		Prompt:    "Leia o plano.",
+		Schema:    schema,
+		Images:    []claude.Image{{Data: pngBytes}},
+		Documents: []claude.Document{{MediaType: "application/pdf", Data: pdfBytes}, {Data: pdfBytes}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := a.bodies[0]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(blocks) != 4 {
+		t.Fatalf("blocks %v", blocks)
+	}
+	for i, want := range []string{"document", "document", "image", "text"} {
+		if got := blocks[i].(map[string]any)["type"]; got != want {
+			t.Errorf("block %d is %v, want %s", i, got, want)
+		}
+	}
+	src := blocks[0].(map[string]any)["source"].(map[string]any)
+	if src["type"] != "base64" || src["media_type"] != "application/pdf" || src["data"] != base64.StdEncoding.EncodeToString(pdfBytes) {
+		t.Errorf("source %v", src)
+	}
+}
+
+// TestADocumentThatCannotBeSentIsRefusedBeforeTheCall: other type, empty, not a
+// PDF by its bytes, too big and too many.
+func TestADocumentThatCannotBeSentIsRefusedBeforeTheCall(t *testing.T) {
+	cases := map[string][]claude.Document{
+		"png as pdf":    {{MediaType: "application/pdf", Data: pngBytes}},
+		"docx type":     {{MediaType: "application/msword", Data: pdfBytes}},
+		"not a pdf":     {{Data: []byte("plain text")}},
+		"empty":         {{}},
+		"too big":       {{Data: append(bytes.Clone(pdfBytes), make([]byte, claude.MaxDocumentBytes)...)}},
+		"second is bad": {{Data: pdfBytes}, {Data: jpegBytes}},
+		"too many":      make([]claude.Document, claude.MaxDocuments+1),
+	}
+	for name, docs := range cases {
+		t.Run(name, func(t *testing.T) {
+			a := &api{reply: func(int) (int, string) { return 200, message("end_turn", "ok") }}
+			c := client(t, a.server(t), claude.Config{})
+			_, err := c.Complete(context.Background(), claude.Request{Prompt: "p", Documents: docs})
+			if !errors.Is(err, claude.ErrBadDocument) {
+				t.Fatalf("err %v, want ErrBadDocument", err)
+			}
+			if a.calls.Load() != 0 {
+				t.Fatal("the API was called with an invalid document")
+			}
+		})
+	}
+	for _, d := range []claude.Document{{Data: pdfBytes}, {MediaType: "Application/PDF", Data: pdfBytes}} {
+		if err := d.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v", d.MediaType, err)
+		}
+	}
+}
+
+// TestTheFakeRecordsTheDocuments: the application's test can check that the PDF
+// reached the call.
+func TestTheFakeRecordsTheDocuments(t *testing.T) {
+	f := claude.NewFake(claude.Answer{Text: "ok"})
+	if _, err := f.Complete(context.Background(), claude.Request{Prompt: "p", Documents: []claude.Document{{Data: pdfBytes}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Requests()[0].Documents; len(got) != 1 || !bytes.Equal(got[0].Data, pdfBytes) {
+		t.Fatalf("documents %+v", got)
+	}
+}
