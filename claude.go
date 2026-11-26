@@ -12,6 +12,7 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -139,6 +140,46 @@ func (im Image) Validate() error {
 	return err
 }
 
+// The limits on PDF documents, checked here so a request that cannot work fails
+// before it is sent. The Messages API takes a request of 32 MB in all and reads at
+// most 100 pages of PDF per request.
+const (
+	// MaxDocumentBytes is the largest PDF sent, 32 MB: the API's request limit.
+	MaxDocumentBytes = 32 * 1024 * 1024
+	// MaxDocuments is the most PDFs one request carries. It is this package's own
+	// bound; the pages of all of them together still count against the API's 100.
+	MaxDocuments = 5
+)
+
+// Document is a PDF sent with the question. The model reads its text and looks
+// at its pages as pictures, so a scanned PDF (pages that are images) is read too.
+type Document struct {
+	// MediaType is "application/pdf". Empty means it is detected from Data.
+	MediaType string
+	// Data is the raw bytes of the file, not base64. At most MaxDocumentBytes.
+	Data []byte
+}
+
+// ErrBadDocument is what a document that cannot be sent wraps.
+var ErrBadDocument = errors.New("claude: invalid document")
+
+// Validate reports why the document cannot be sent, wrapping ErrBadDocument.
+func (d Document) Validate() error {
+	if len(d.Data) == 0 {
+		return fmt.Errorf("%w: empty", ErrBadDocument)
+	}
+	if len(d.Data) > MaxDocumentBytes {
+		return fmt.Errorf("%w: %d bytes exceeds the %d byte limit", ErrBadDocument, len(d.Data), MaxDocumentBytes)
+	}
+	if declared := strings.ToLower(strings.TrimSpace(d.MediaType)); declared != "" && declared != "application/pdf" {
+		return fmt.Errorf("%w: type %q is not application/pdf", ErrBadDocument, declared)
+	}
+	if !bytes.HasPrefix(d.Data, []byte("%PDF-")) {
+		return fmt.Errorf("%w: the bytes are not a PDF", ErrBadDocument)
+	}
+	return nil
+}
+
 // Request is one question.
 type Request struct {
 	// System is the instruction that frames every answer: who is answering,
@@ -147,6 +188,10 @@ type Request struct {
 	System string
 	// Prompt is the question itself. Required.
 	Prompt string
+	// Documents are PDFs the question is about, sent first in the same message,
+	// before the Images and the Prompt. Optional; at most MaxDocuments, each
+	// valid per Document.
+	Documents []Document
 	// Images are pictures the question is about, sent before the Prompt in
 	// the same message. Optional; at most MaxImages, each valid per Image.
 	Images []Image
@@ -331,12 +376,23 @@ func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 	return read(msg, req.Schema != nil)
 }
 
-// content builds the user message: the images first, then the prompt.
+// content builds the user message: the documents, then the images, then the prompt.
 func content(req Request) ([]anthropic.BetaContentBlockParamUnion, error) {
+	if len(req.Documents) > MaxDocuments {
+		return nil, fmt.Errorf("%w: %d documents exceeds the limit of %d", ErrBadDocument, len(req.Documents), MaxDocuments)
+	}
 	if len(req.Images) > MaxImages {
 		return nil, fmt.Errorf("%w: %d images exceeds the limit of %d", ErrBadImage, len(req.Images), MaxImages)
 	}
-	blocks := make([]anthropic.BetaContentBlockParamUnion, 0, len(req.Images)+1)
+	blocks := make([]anthropic.BetaContentBlockParamUnion, 0, len(req.Documents)+len(req.Images)+1)
+	for i, d := range req.Documents {
+		if err := d.Validate(); err != nil {
+			return nil, fmt.Errorf("claude: Request.Documents[%d]: %w", i, err)
+		}
+		blocks = append(blocks, anthropic.NewBetaDocumentBlock(anthropic.BetaBase64PDFSourceParam{
+			Data: base64.StdEncoding.EncodeToString(d.Data),
+		}))
+	}
 	for i, im := range req.Images {
 		mt, err := im.mediaType()
 		if err != nil {

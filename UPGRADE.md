@@ -1,6 +1,10 @@
 # Upgrade Guide
 
-## Unreleased
+## 0.4.0
+
+Nothing to change. `Request.Documents` is optional; a request without it is sent as before.
+
+## 0.3.0
 
 Nothing to change. `Request.Images` is optional; a request without it is sent as before.
 
